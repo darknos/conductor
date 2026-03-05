@@ -150,6 +150,16 @@ export enum IssueOrchestratorState {
   Released = 'released',
 }
 
+export enum RunAttemptPhase {
+  PreparingWorkspace = 'preparing_workspace',
+  BuildingPrompt = 'building_prompt',
+  LaunchingAgent = 'launching_agent',
+  StreamingTurns = 'streaming_turns',
+  Finishing = 'finishing',
+  Succeeded = 'succeeded',
+  Failed = 'failed',
+}
+
 export interface SessionMetrics {
   inputTokens: number;
   outputTokens: number;
@@ -168,12 +178,14 @@ export interface RunningEntry {
   identifier: string;
   issue: Issue;
   sessionId: string | null;
+  phase: RunAttemptPhase;
   lastAgentMessage: string | null;
   lastAgentEvent: string | null;
   lastAgentTimestamp: Date | null;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  turnCount: number;
   retryAttempt: number | null;
   startedAt: Date;
 }
@@ -214,7 +226,8 @@ export type AgentEvent =
   | { type: 'session_started'; issueId: string; sessionId: string }
   | { type: 'turn_completed'; issueId: string; metrics: SessionMetrics }
   | { type: 'turn_failed'; issueId: string; error: string }
-  | { type: 'notification'; issueId: string; message: string };
+  | { type: 'notification'; issueId: string; message: string }
+  | { type: 'rate_limit'; issueId: string; retryAfterMs: number };
 
 // --- Status Surface ---
 
@@ -226,6 +239,7 @@ export interface StateSnapshot {
     issueIdentifier: string;
     state: string;
     sessionId: string | null;
+    turnCount: number;
     lastEvent: string | null;
     lastMessage: string | null;
     startedAt: string;

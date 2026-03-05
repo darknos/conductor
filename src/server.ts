@@ -11,6 +11,7 @@ export function buildSnapshot(orchestrator: Orchestrator): StateSnapshot {
     issueIdentifier: e.identifier,
     state: e.issue.state,
     sessionId: e.sessionId,
+    turnCount: e.turnCount,
     lastEvent: e.lastAgentEvent,
     lastMessage: e.lastAgentMessage,
     startedAt: e.startedAt.toISOString(),
@@ -312,34 +313,50 @@ export function startServer(orchestrator: Orchestrator, port: number): Server {
         const identifier = path.slice('/api/v1/'.length);
         const state = orchestrator.getState();
 
-        const running = [...state.running.values()].find((e) => e.identifier === identifier);
-        if (running) {
+        const runningEntry = [...state.running.values()].find((e) => e.identifier === identifier);
+        const retryEntry = [...state.retryQueue.values()].find((e) => e.identifier === identifier);
+        const isCompleted = [...state.completed].some((id) => {
+          const r = [...state.running.values()].find((e) => e.issue.id === id);
+          return r?.identifier === identifier;
+        });
+
+        const status = runningEntry ? 'running' : retryEntry ? 'retrying' : isCompleted ? 'completed' : 'unknown';
+
+        if (runningEntry || retryEntry) {
+          const wsManager = orchestrator.getConfig().workspace;
           sendJson(res, 200, {
-            issueId: running.issue.id,
-            identifier: running.identifier,
-            state: running.issue.state,
-            sessionId: running.sessionId,
-            lastEvent: running.lastAgentEvent,
-            lastMessage: running.lastAgentMessage,
-            tokens: { inputTokens: running.inputTokens, outputTokens: running.outputTokens, totalTokens: running.totalTokens },
-            startedAt: running.startedAt.toISOString(),
+            issueIdentifier: identifier,
+            issueId: runningEntry?.issue.id ?? retryEntry?.issueId,
+            status,
+            workspace: { path: `${wsManager.root}/${identifier}` },
+            attempts: {
+              restartCount: runningEntry?.retryAttempt ?? retryEntry?.attempt ?? 0,
+              currentRetryAttempt: retryEntry?.attempt ?? null,
+            },
+            running: runningEntry ? {
+              sessionId: runningEntry.sessionId,
+              turnCount: runningEntry.turnCount,
+              lastEvent: runningEntry.lastAgentEvent,
+              lastMessage: runningEntry.lastAgentMessage,
+              startedAt: runningEntry.startedAt.toISOString(),
+              lastEventAt: runningEntry.lastAgentTimestamp?.toISOString() ?? null,
+              tokens: {
+                inputTokens: runningEntry.inputTokens,
+                outputTokens: runningEntry.outputTokens,
+                totalTokens: runningEntry.totalTokens,
+              },
+            } : null,
+            retry: retryEntry ? {
+              attempt: retryEntry.attempt,
+              dueAt: new Date(retryEntry.dueAtMs).toISOString(),
+              error: retryEntry.error,
+            } : null,
+            lastError: retryEntry?.error ?? null,
           });
           return;
         }
 
-        const retry = [...state.retryQueue.values()].find((e) => e.identifier === identifier);
-        if (retry) {
-          sendJson(res, 200, {
-            issueId: retry.issueId,
-            identifier: retry.identifier,
-            attempt: retry.attempt,
-            dueAt: new Date(retry.dueAtMs).toISOString(),
-            error: retry.error,
-          });
-          return;
-        }
-
-        sendJson(res, 404, { error: 'Issue not found' });
+        sendJson(res, 404, { error: { code: 'issue_not_found', message: `Issue ${identifier} not found` } });
         return;
       }
 
@@ -347,11 +364,21 @@ export function startServer(orchestrator: Orchestrator, port: number): Server {
         orchestrator.triggerPoll().catch((err) => {
           logger.error('Manual poll trigger failed', { error: String(err) });
         });
-        sendJson(res, 200, { status: 'poll triggered' });
+        sendJson(res, 202, {
+          queued: true,
+          coalesced: false,
+          requestedAt: new Date().toISOString(),
+          operations: ['poll', 'reconcile'],
+        });
         return;
       }
 
-      sendJson(res, 404, { error: 'Not found' });
+      // 405 on known routes with wrong method
+      if (path.startsWith('/api/v1/')) {
+        sendJson(res, 405, { error: { code: 'method_not_allowed', message: `Method ${req.method} not allowed` } });
+        return;
+      }
+      sendJson(res, 404, { error: { code: 'not_found', message: 'Not found' } });
     } catch (err) {
       logger.error('Server request error', { error: String(err), path });
       sendJson(res, 500, { error: 'Internal server error' });

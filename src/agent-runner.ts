@@ -124,8 +124,9 @@ export class AgentRunner {
       }
     }
 
-    // Render prompt
-    const prompt = await this.renderPrompt(issue, attempt, promptTemplate);
+    // Render prompt (fallback to minimal default if template is empty per §5.4)
+    const effectiveTemplate = promptTemplate.trim() || 'You are working on issue `{{ issue.identifier }}`: {{ issue.title }}';
+    const prompt = await this.renderPrompt(issue, attempt, effectiveTemplate);
 
     // Build SDK options
     const queryOptions: AgentQueryOptions = {
@@ -163,9 +164,8 @@ export class AgentRunner {
       });
 
       const runAgent = async () => {
-        logger.info('Starting SDK query', { ...ctx, cwd: queryOptions.cwd, permissionMode: queryOptions.permissionMode, maxTurns: queryOptions.maxTurns });
+        logger.debug('Starting SDK query', { ...ctx, cwd: queryOptions.cwd, permissionMode: queryOptions.permissionMode, maxTurns: queryOptions.maxTurns });
         const stream = this.sdk.query(queryOptions);
-        logger.info('SDK stream created, waiting for messages...', { ...ctx });
         for await (const message of stream) {
           // Check abort
           if (abortSignal?.aborted) {
@@ -174,7 +174,7 @@ export class AgentRunner {
           }
 
           const msg = message as unknown as Record<string, unknown>;
-          logger.info(`SDK message: type=${msg.type} subtype=${msg.subtype ?? ''}`, { ...ctx });
+          logger.debug(`SDK message: type=${msg.type} subtype=${msg.subtype ?? ''}`, { ...ctx });
 
           switch (msg.type) {
             case 'assistant':
@@ -193,6 +193,10 @@ export class AgentRunner {
                 metrics.outputTokens = usage.output_tokens ?? usage.outputTokens ?? 0;
                 metrics.totalTokens = (metrics.inputTokens + metrics.outputTokens);
               }
+              // Extract session ID
+              if (msg.session_id && typeof msg.session_id === 'string') {
+                sessionId = msg.session_id as string;
+              }
               const subtype = msg.subtype as string;
               if (subtype === 'success') {
                 exitReason = ExitReasonEnum.Normal;
@@ -207,6 +211,16 @@ export class AgentRunner {
                   error: exitError,
                 });
               }
+              break;
+            }
+
+            case 'rate_limit_event': {
+              const retryAfter = (msg.retryAfterMs ?? msg.retry_after_ms ?? 0) as number;
+              this.onEvent({
+                type: 'rate_limit',
+                issueId: issue.id,
+                retryAfterMs: retryAfter,
+              });
               break;
             }
 

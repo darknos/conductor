@@ -69,9 +69,8 @@ async function createSDK(): Promise<AgentSDK> {
             maxBudgetUsd: options.maxBudgetUsd,
             env: options.env,
             systemPrompt: options.systemPrompt,
-            debug: true,
             stderr: (data: string) => {
-              logger.warn(`[claude-sdk-stderr] ${data.trimEnd()}`);
+              logger.debug(`[claude-sdk-stderr] ${data.trimEnd()}`);
             },
           },
         }) as any;
@@ -169,9 +168,23 @@ async function main(): Promise<void> {
     logger.warn('Config reload failed, keeping previous config', { error: String(err) });
   });
 
-  // Startup workspace cleanup (must complete before orchestrator starts to avoid race conditions)
+  // Startup terminal workspace cleanup per §8.6
+  // Only clean workspaces for issues that are in terminal states
   try {
-    await cleanupOrphanedWorkspaces(config.workspace.root, new Set());
+    const terminalIssues = await orchestrator.getTracker().fetchIssuesByStates(config.tracker.terminalStates);
+    const terminalIdentifiers = new Set(terminalIssues.map((i) => i.identifier));
+    // Pass all NON-terminal as active so only terminal workspaces are cleaned
+    const allActive = new Set<string>();
+    try {
+      const { readdir } = await import('node:fs/promises');
+      const entries = await readdir(config.workspace.root);
+      for (const entry of entries) {
+        if (!terminalIdentifiers.has(entry)) {
+          allActive.add(entry);
+        }
+      }
+    } catch { /* root may not exist yet */ }
+    await cleanupOrphanedWorkspaces(config.workspace.root, allActive);
   } catch (err) {
     logger.warn('Startup workspace cleanup failed', { error: String(err) });
   }
