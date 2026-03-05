@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { watch } from 'chokidar';
 import { EventEmitter } from 'node:events';
@@ -54,11 +54,19 @@ function asRecord(v: unknown): Record<string, unknown> {
   return (v && typeof v === 'object' && !Array.isArray(v)) ? v as Record<string, unknown> : {};
 }
 
-function buildTrackerConfig(raw: Record<string, unknown>): TrackerConfig {
+function resolveRelativeTo(baseDir: string, value: string): string {
+  const resolved = resolvePath(value);
+  // If already absolute, return as-is
+  if (resolved.startsWith('/')) return resolved;
+  return resolve(baseDir, resolved);
+}
+
+function buildTrackerConfig(raw: Record<string, unknown>, baseDir: string): TrackerConfig {
   const tracker = asRecord(raw['tracker']);
   const kind = getString(tracker, 'kind', 'beads');
   const apiKeyRaw = getString(tracker, 'api_key', '$LINEAR_API_KEY');
   const issuesDirRaw = getStringOrNull(tracker, 'issues_dir');
+  const beadsRepoPathRaw = getStringOrNull(tracker, 'beads_repo_path');
   return {
     kind,
     endpoint: getString(tracker, 'endpoint', 'https://api.linear.app/graphql'),
@@ -68,8 +76,8 @@ function buildTrackerConfig(raw: Record<string, unknown>): TrackerConfig {
     terminalStates: getStringArray(tracker, 'terminal_states', [
       'Closed', 'Cancelled', 'Canceled', 'Duplicate', 'Done',
     ]),
-    issuesDir: issuesDirRaw ? resolvePath(issuesDirRaw) : null,
-    beadsRepoPath: getStringOrNull(tracker, 'beads_repo_path'),
+    issuesDir: issuesDirRaw ? resolveRelativeTo(baseDir, issuesDirRaw) : null,
+    beadsRepoPath: beadsRepoPathRaw ? resolveRelativeTo(baseDir, beadsRepoPathRaw) : null,
   };
 }
 
@@ -125,7 +133,8 @@ function buildDashboardConfig(raw: Record<string, unknown>): DashboardConfig {
   };
 }
 
-export function buildConfig(raw: Record<string, unknown>): ConductorConfig {
+export function buildConfig(raw: Record<string, unknown>, workflowPath?: string): ConductorConfig {
+  const baseDir = workflowPath ? dirname(resolve(workflowPath)) : process.cwd();
   const polling = asRecord(raw['polling']);
   const workspace = asRecord(raw['workspace']);
   const server = asRecord(raw['server']);
@@ -134,7 +143,7 @@ export function buildConfig(raw: Record<string, unknown>): ConductorConfig {
   const rootRaw = getString(workspace, 'root', defaultRoot);
 
   return {
-    tracker: buildTrackerConfig(raw),
+    tracker: buildTrackerConfig(raw, baseDir),
     polling: {
       intervalMs: getNumber(polling, 'interval_ms', 30_000),
     },
@@ -162,7 +171,7 @@ export class ConfigManager extends EventEmitter {
 
   async load(): Promise<ConductorConfig> {
     const workflow = await loadWorkflow(this.workflowPath);
-    this.config = buildConfig(workflow.config);
+    this.config = buildConfig(workflow.config, this.workflowPath);
     return this.config;
   }
 
@@ -176,7 +185,7 @@ export class ConfigManager extends EventEmitter {
     this.watcher.on('change', async () => {
       try {
         const workflow = await loadWorkflow(this.workflowPath);
-        this.config = buildConfig(workflow.config);
+        this.config = buildConfig(workflow.config, this.workflowPath);
         this.emit('config-reloaded', this.config);
       } catch (err) {
         this.emit('config-reload-error', err);

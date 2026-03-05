@@ -71,6 +71,8 @@ export interface ITrackerClient {
   fetchIssueStatesByIds(ids: string[]): Promise<Issue[]>;
   fetchAllProjectIssues(): Promise<Issue[]>;
   fetchIssuesByStates(stateNames: string[]): Promise<Issue[]>;
+  /** Update issue state (optional — not all trackers support writes) */
+  updateIssueState?(issueId: string, newState: string): Promise<void>;
 }
 
 export interface AgentConfig {
@@ -133,6 +135,7 @@ export interface Workspace {
 
 export enum ExitReason {
   Normal = 'normal',
+  MaxTurns = 'max_turns',
   Failure = 'failure',
   Timeout = 'timeout',
   Stall = 'stall',

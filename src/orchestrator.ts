@@ -279,8 +279,18 @@ export class Orchestrator extends EventEmitter {
 
     switch (exit.reason) {
       case ExitReason.Normal:
-        // Continuation retry at 1s
-        this.scheduleRetry(issue, (entry?.retryAttempt ?? 0) + 1, CONTINUATION_RETRY_DELAY_MS, null);
+      case ExitReason.MaxTurns:
+        // Agent completed — update tracker state and mark done
+        logger.info(`Agent finished ${identifier} (${exit.reason}), marking completed`, {
+          issueId: id,
+          issueIdentifier: identifier,
+        });
+        this.state.completed.add(id);
+        if (this.tracker.updateIssueState) {
+          this.tracker.updateIssueState(id, 'Done').catch((err) => {
+            logger.warn(`Failed to update issue state for ${identifier}`, { error: String(err) });
+          });
+        }
         break;
 
       case ExitReason.Failure:

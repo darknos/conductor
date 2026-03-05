@@ -1,16 +1,10 @@
 ---
 id: local-1
 identifier: LOCAL-1
-title: Add user authentication
-state: Todo
+title: Create hello.txt
+state: Done
 priority: 1
-labels: [feature, auth]
+labels: [demo]
 ---
 
-Implement basic user authentication with email/password login.
-
-## Acceptance Criteria
-
-- Users can sign up with email and password
-- Users can log in with existing credentials
-- Session tokens are issued on successful login
+Create a file called `hello.txt` with the text "Hello, World!" in the workspace root.

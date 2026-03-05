@@ -163,7 +163,9 @@ export class AgentRunner {
       });
 
       const runAgent = async () => {
+        logger.info('Starting SDK query', { ...ctx, cwd: queryOptions.cwd, permissionMode: queryOptions.permissionMode, maxTurns: queryOptions.maxTurns });
         const stream = this.sdk.query(queryOptions);
+        logger.info('SDK stream created, waiting for messages...', { ...ctx });
         for await (const message of stream) {
           // Check abort
           if (abortSignal?.aborted) {
@@ -171,7 +173,10 @@ export class AgentRunner {
             break;
           }
 
-          switch (message.type) {
+          const msg = message as unknown as Record<string, unknown>;
+          logger.info(`SDK message: type=${msg.type} subtype=${msg.subtype ?? ''}`, { ...ctx });
+
+          switch (msg.type) {
             case 'assistant':
               metrics.turnsCompleted++;
               this.onEvent({
@@ -181,21 +186,21 @@ export class AgentRunner {
               });
               break;
 
-            case 'result':
-              if (message.usage) {
-                metrics.inputTokens += message.usage.input_tokens;
-                metrics.outputTokens += message.usage.output_tokens;
-                metrics.totalTokens += message.usage.total_tokens;
+            case 'result': {
+              const usage = msg.usage as Record<string, number> | undefined;
+              if (usage) {
+                metrics.inputTokens = usage.input_tokens ?? usage.inputTokens ?? 0;
+                metrics.outputTokens = usage.output_tokens ?? usage.outputTokens ?? 0;
+                metrics.totalTokens = (metrics.inputTokens + metrics.outputTokens);
               }
-              if (message.session_id) {
-                sessionId = message.session_id;
-                if (!sessionId) {
-                  // handled below
-                }
-              }
-              if (message.subtype === 'error') {
+              const subtype = msg.subtype as string;
+              if (subtype === 'success') {
+                exitReason = ExitReasonEnum.Normal;
+              } else if (subtype === 'error_max_turns') {
+                exitReason = ExitReasonEnum.MaxTurns;
+              } else if (subtype?.startsWith('error')) {
                 exitReason = ExitReasonEnum.Failure;
-                exitError = message.error ?? 'Unknown SDK error';
+                exitError = (msg.error ?? msg.stop_reason ?? `SDK error: ${subtype}`) as string;
                 this.onEvent({
                   type: 'turn_failed',
                   issueId: issue.id,
@@ -203,9 +208,10 @@ export class AgentRunner {
                 });
               }
               break;
+            }
 
-            case 'stream':
-              // Stream events update liveness tracking
+            default:
+              // Other message types (user, system, status, etc.) — update liveness
               break;
           }
         }
@@ -220,7 +226,8 @@ export class AgentRunner {
         exitReason = ExitReasonEnum.Failure;
         exitError = err instanceof Error ? err.message : String(err);
       }
-      logger.error('Agent run failed', { ...ctx, error: exitError });
+      const stack = err instanceof Error ? err.stack : undefined;
+      logger.error('Agent run failed', { ...ctx, error: exitError, stack });
     }
 
     // Emit session started if we got a session ID
