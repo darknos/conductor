@@ -71,6 +71,14 @@ export class Orchestrator extends EventEmitter {
     return this.state;
   }
 
+  getTracker(): TrackerClient {
+    return this.tracker;
+  }
+
+  getConfig(): ConductorConfig {
+    return this.config;
+  }
+
   start(): void {
     logger.info('Orchestrator starting');
     // Immediate first tick

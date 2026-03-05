@@ -193,6 +193,48 @@ export class TrackerClient {
     return allIssues;
   }
 
+  async fetchAllProjectIssues(): Promise<Issue[]> {
+    const allIssues: Issue[] = [];
+    let cursor: string | null = null;
+    let hasMore = true;
+
+    while (hasMore) {
+      const result = await this.graphql(
+        `query($projectSlug: String!, $first: Int!, $after: String) {
+          issues(
+            filter: {
+              project: { slugId: { eq: $projectSlug } }
+            }
+            first: $first
+            after: $after
+          ) {
+            nodes { ${ISSUE_FIELDS} }
+            pageInfo { hasNextPage endCursor }
+          }
+        }`,
+        {
+          projectSlug: this.projectSlug,
+          first: DEFAULT_PAGE_SIZE,
+          after: cursor,
+        },
+      );
+
+      if (result.errors?.length) {
+        throw new Error(`Linear GraphQL errors: ${result.errors.map((e) => e.message).join(', ')}`);
+      }
+
+      const issues = result.data?.issues;
+      if (!issues) break;
+
+      allIssues.push(...issues.nodes.map(normalizeIssue));
+      hasMore = issues.pageInfo.hasNextPage;
+      cursor = issues.pageInfo.endCursor;
+    }
+
+    logger.debug(`Fetched ${allIssues.length} total project issues`);
+    return allIssues;
+  }
+
   async fetchIssuesByStates(stateNames: string[]): Promise<Issue[]> {
     const allIssues: Issue[] = [];
     let cursor: string | null = null;
