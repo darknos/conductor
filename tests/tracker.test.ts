@@ -10,6 +10,7 @@ const mockConfig: TrackerConfig = {
   activeStates: ['Todo', 'In Progress'],
   terminalStates: ['Done', 'Closed'],
   issuesDir: null,
+  beadsRepoPath: null,
 };
 
 function makeIssueNode(overrides: Record<string, unknown> = {}) {

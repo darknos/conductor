@@ -14,6 +14,7 @@ function makeConfig(issuesDir: string): TrackerConfig {
     activeStates: ['Todo', 'In Progress'],
     terminalStates: ['Done', 'Cancelled'],
     issuesDir,
+    beadsRepoPath: null,
   };
 }
 

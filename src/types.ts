@@ -59,6 +59,8 @@ export interface TrackerConfig {
   terminalStates: string[];
   /** Directory containing issue files (for kind: "local") */
   issuesDir: string | null;
+  /** Path to beads repository (for kind: "beads") */
+  beadsRepoPath: string | null;
 }
 
 // --- Tracker Interface ---

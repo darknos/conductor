@@ -64,6 +64,7 @@ function buildTrackerConfig(raw: Record<string, unknown>): TrackerConfig {
       'Closed', 'Cancelled', 'Canceled', 'Duplicate', 'Done',
     ]),
     issuesDir: issuesDirRaw ? resolvePath(issuesDirRaw) : null,
+    beadsRepoPath: getStringOrNull(tracker, 'beads_repo_path'),
   };
 }
 
