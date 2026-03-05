@@ -1,6 +1,6 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { Orchestrator } from './orchestrator.js';
-import type { Issue, StateSnapshot } from './types.js';
+import type { Issue, StateSnapshot, DashboardConfig } from './types.js';
 import * as logger from './logger.js';
 
 export function buildSnapshot(orchestrator: Orchestrator): StateSnapshot {
@@ -275,12 +275,22 @@ setTimeout(()=>location.reload(),30000);
 }
 
 export function startServer(orchestrator: Orchestrator, port: number): Server {
+  const dashboardConfig = orchestrator.getConfig().dashboard;
+  const dashboardUrl = dashboardConfig.externalUrl ?? (dashboardConfig.autoLaunch ? `http://localhost:${dashboardConfig.port}` : null);
+
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
     const path = url.pathname;
 
     try {
       if (req.method === 'GET' && path === '/') {
+        // Redirect to external dashboard (beadboard) if configured
+        if (dashboardUrl) {
+          res.writeHead(302, { 'Location': dashboardUrl });
+          res.end();
+          return;
+        }
+        // Fallback to built-in board
         const boardData = await buildBoardData(orchestrator);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(renderBoard(boardData));

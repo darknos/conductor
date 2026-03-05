@@ -1,11 +1,13 @@
 import { resolve } from 'node:path';
 import { access, constants, readdir, rm } from 'node:fs/promises';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { ConfigManager } from './config.js';
 import { loadWorkflow } from './workflow-loader.js';
 import { Orchestrator } from './orchestrator.js';
 import { startServer } from './server.js';
 import * as logger from './logger.js';
 import type { AgentSDK } from './agent-runner.js';
+import type { DashboardConfig } from './types.js';
 
 function parseArgs(args: string[]): { workflowPath: string; port: number | null } {
   let workflowPath = './WORKFLOW.md';
@@ -61,6 +63,44 @@ async function createSDK(): Promise<AgentSDK> {
   }
 }
 
+function launchBeadboard(dashboardConfig: DashboardConfig): ChildProcess | null {
+  if (!dashboardConfig.autoLaunch || dashboardConfig.externalUrl) {
+    return null;
+  }
+
+  const port = String(dashboardConfig.port);
+
+  // Try npx beadboard first, fall back to beadboard if installed globally
+  const child = spawn('npx', ['beadboard', '--port', port], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+    env: { ...process.env, PORT: port },
+  });
+
+  child.stdout?.on('data', (data: Buffer) => {
+    const line = data.toString().trim();
+    if (line) logger.info(`[beadboard] ${line}`);
+  });
+
+  child.stderr?.on('data', (data: Buffer) => {
+    const line = data.toString().trim();
+    if (line) logger.warn(`[beadboard] ${line}`);
+  });
+
+  child.on('error', (err) => {
+    logger.warn(`Beadboard launch failed: ${err.message}. Dashboard will not be available.`);
+  });
+
+  child.on('exit', (code) => {
+    if (code !== null && code !== 0) {
+      logger.warn(`Beadboard exited with code ${code}`);
+    }
+  });
+
+  logger.info(`Beadboard dashboard launching on http://localhost:${port}`);
+  return child;
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
@@ -83,9 +123,9 @@ async function main(): Promise<void> {
   // Load prompt template
   const workflow = await loadWorkflow(args.workflowPath);
 
-  // Validate tracker config
-  if (!config.tracker.apiKey) {
-    logger.error('Tracker API key is required (set LINEAR_API_KEY or tracker.api_key)');
+  // Validate tracker config (API key only required for Linear)
+  if (config.tracker.kind === 'linear' && !config.tracker.apiKey) {
+    logger.error('Tracker API key is required for Linear (set LINEAR_API_KEY or tracker.api_key)');
     process.exit(1);
   }
 
@@ -120,12 +160,18 @@ async function main(): Promise<void> {
     server = startServer(orchestrator, serverPort);
   }
 
+  // Launch beadboard dashboard
+  const beadboardProcess = launchBeadboard(config.dashboard);
+
   // Start orchestrator
   orchestrator.start();
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down`);
+    if (beadboardProcess && !beadboardProcess.killed) {
+      beadboardProcess.kill('SIGTERM');
+    }
     await orchestrator.stop();
     if (server) {
       server.close();

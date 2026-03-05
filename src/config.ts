@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { watch } from 'chokidar';
 import { EventEmitter } from 'node:events';
 import { loadWorkflow } from './workflow-loader.js';
-import type { ConductorConfig, TrackerConfig, AgentConfig, HookScripts, ServerConfig } from './types.js';
+import type { ConductorConfig, TrackerConfig, AgentConfig, HookScripts, ServerConfig, DashboardConfig } from './types.js';
 
 export function resolveEnvVar(value: string): string {
   return value.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, name) => {
@@ -45,13 +45,18 @@ function getNumberOrNull(obj: Record<string, unknown>, key: string): number | nu
   return typeof v === 'number' ? v : null;
 }
 
+function getBoolean(obj: Record<string, unknown>, key: string, fallback: boolean): boolean {
+  const v = obj[key];
+  return typeof v === 'boolean' ? v : fallback;
+}
+
 function asRecord(v: unknown): Record<string, unknown> {
   return (v && typeof v === 'object' && !Array.isArray(v)) ? v as Record<string, unknown> : {};
 }
 
 function buildTrackerConfig(raw: Record<string, unknown>): TrackerConfig {
   const tracker = asRecord(raw['tracker']);
-  const kind = getString(tracker, 'kind', 'linear');
+  const kind = getString(tracker, 'kind', 'beads');
   const apiKeyRaw = getString(tracker, 'api_key', '$LINEAR_API_KEY');
   const issuesDirRaw = getStringOrNull(tracker, 'issues_dir');
   return {
@@ -111,6 +116,15 @@ function buildHookScripts(raw: Record<string, unknown>): HookScripts {
   };
 }
 
+function buildDashboardConfig(raw: Record<string, unknown>): DashboardConfig {
+  const dashboard = asRecord(raw['dashboard']);
+  return {
+    externalUrl: getStringOrNull(dashboard, 'external_url'),
+    autoLaunch: getBoolean(dashboard, 'auto_launch', true),
+    port: getNumber(dashboard, 'port', 3000),
+  };
+}
+
 export function buildConfig(raw: Record<string, unknown>): ConductorConfig {
   const polling = asRecord(raw['polling']);
   const workspace = asRecord(raw['workspace']);
@@ -124,6 +138,7 @@ export function buildConfig(raw: Record<string, unknown>): ConductorConfig {
     polling: {
       intervalMs: getNumber(polling, 'interval_ms', 30_000),
     },
+    dashboard: buildDashboardConfig(raw),
     workspace: {
       root: resolvePath(rootRaw),
     },

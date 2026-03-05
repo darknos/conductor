@@ -10,6 +10,9 @@ tracker:
     - Cancelled
 polling:
   interval_ms: 5000
+dashboard:
+  auto_launch: true
+  port: 3000
 workspace:
   root: ~/conductor-workspaces
 agent:

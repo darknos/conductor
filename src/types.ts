@@ -98,6 +98,15 @@ export interface HookScripts {
   timeoutMs: number;
 }
 
+export interface DashboardConfig {
+  /** External dashboard URL to redirect to (e.g. beadboard at http://localhost:3000) */
+  externalUrl: string | null;
+  /** Auto-launch beadboard dashboard alongside conductor */
+  autoLaunch: boolean;
+  /** Port for beadboard (default: 3000) */
+  port: number;
+}
+
 export interface ServerConfig {
   port: number | null;
 }
@@ -105,6 +114,7 @@ export interface ServerConfig {
 export interface ConductorConfig {
   tracker: TrackerConfig;
   polling: { intervalMs: number };
+  dashboard: DashboardConfig;
   workspace: { root: string };
   hooks: HookScripts;
   agent: AgentConfig;

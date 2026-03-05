@@ -44,6 +44,7 @@ function makeConfig(overrides: Partial<ConductorConfig> = {}): ConductorConfig {
       env: {},
       sandbox: null,
     },
+    dashboard: { externalUrl: null, autoLaunch: false, port: 3000 },
     server: { port: null },
     ...overrides,
   };

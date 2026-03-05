@@ -48,7 +48,7 @@ describe('buildConfig', () => {
     expect(config.agent.stallTimeoutMs).toBe(300_000);
     expect(config.agent.allowedTools).toEqual(['Read', 'Edit', 'Glob', 'Grep', 'Bash']);
     expect(config.hooks.timeoutMs).toBe(60_000);
-    expect(config.tracker.kind).toBe('linear');
+    expect(config.tracker.kind).toBe('beads');
     expect(config.tracker.endpoint).toBe('https://api.linear.app/graphql');
     expect(config.tracker.activeStates).toEqual(['Todo', 'In Progress']);
     expect(config.tracker.terminalStates).toEqual(['Closed', 'Cancelled', 'Canceled', 'Duplicate', 'Done']);
@@ -119,5 +119,35 @@ describe('buildConfig', () => {
   it('defaults server port to null', () => {
     const config = buildConfig({});
     expect(config.server.port).toBeNull();
+  });
+
+  it('applies dashboard defaults', () => {
+    const config = buildConfig({});
+    expect(config.dashboard.externalUrl).toBeNull();
+    expect(config.dashboard.autoLaunch).toBe(true);
+    expect(config.dashboard.port).toBe(3000);
+  });
+
+  it('reads custom dashboard config', () => {
+    const config = buildConfig({
+      dashboard: {
+        external_url: 'http://my-board:4000',
+        auto_launch: false,
+        port: 4000,
+      },
+    });
+    expect(config.dashboard.externalUrl).toBe('http://my-board:4000');
+    expect(config.dashboard.autoLaunch).toBe(false);
+    expect(config.dashboard.port).toBe(4000);
+  });
+
+  it('defaults tracker kind to beads', () => {
+    const config = buildConfig({});
+    expect(config.tracker.kind).toBe('beads');
+  });
+
+  it('allows overriding tracker kind to linear', () => {
+    const config = buildConfig({ tracker: { kind: 'linear' } });
+    expect(config.tracker.kind).toBe('linear');
   });
 });
