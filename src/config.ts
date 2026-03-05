@@ -53,6 +53,7 @@ function buildTrackerConfig(raw: Record<string, unknown>): TrackerConfig {
   const tracker = asRecord(raw['tracker']);
   const kind = getString(tracker, 'kind', 'linear');
   const apiKeyRaw = getString(tracker, 'api_key', '$LINEAR_API_KEY');
+  const issuesDirRaw = getStringOrNull(tracker, 'issues_dir');
   return {
     kind,
     endpoint: getString(tracker, 'endpoint', 'https://api.linear.app/graphql'),
@@ -62,6 +63,7 @@ function buildTrackerConfig(raw: Record<string, unknown>): TrackerConfig {
     terminalStates: getStringArray(tracker, 'terminal_states', [
       'Closed', 'Cancelled', 'Canceled', 'Duplicate', 'Done',
     ]),
+    issuesDir: issuesDirRaw ? resolvePath(issuesDirRaw) : null,
   };
 }
 

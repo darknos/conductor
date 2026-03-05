@@ -8,9 +8,10 @@ import type {
   AggregateTotals,
   WorkerExit,
   AgentEvent,
+  ITrackerClient,
 } from './types.js';
 import { ExitReason } from './types.js';
-import { TrackerClient } from './tracker.js';
+import { createTracker } from './tracker-factory.js';
 import { WorkspaceManager } from './workspace.js';
 import { AgentRunner } from './agent-runner.js';
 import type { AgentSDK } from './agent-runner.js';
@@ -22,7 +23,7 @@ const FAILURE_BASE_DELAY_MS = 10_000;
 export class Orchestrator extends EventEmitter {
   private config: ConductorConfig;
   private promptTemplate: string;
-  private tracker: TrackerClient;
+  private tracker: ITrackerClient;
   private wsManager: WorkspaceManager;
   private agentRunner: AgentRunner;
   private state: OrchestratorState;
@@ -39,7 +40,7 @@ export class Orchestrator extends EventEmitter {
     this.config = config;
     this.promptTemplate = promptTemplate;
 
-    this.tracker = new TrackerClient(config.tracker);
+    this.tracker = createTracker(config.tracker);
     this.wsManager = new WorkspaceManager(config.workspace.root, config.hooks);
     this.agentRunner = new AgentRunner({
       agentConfig: config.agent,
@@ -71,7 +72,7 @@ export class Orchestrator extends EventEmitter {
     return this.state;
   }
 
-  getTracker(): TrackerClient {
+  getTracker(): ITrackerClient {
     return this.tracker;
   }
 

@@ -16,6 +16,7 @@ function makeConfig(overrides: Partial<ConductorConfig> = {}): ConductorConfig {
       projectSlug: 'test',
       activeStates: ['Todo', 'In Progress'],
       terminalStates: ['Done', 'Closed'],
+      issuesDir: null,
     },
     polling: { intervalMs: 60_000 }, // long interval to prevent auto-ticks
     workspace: { root: '' }, // will be set per test

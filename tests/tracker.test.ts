@@ -9,6 +9,7 @@ const mockConfig: TrackerConfig = {
   projectSlug: 'test-project',
   activeStates: ['Todo', 'In Progress'],
   terminalStates: ['Done', 'Closed'],
+  issuesDir: null,
 };
 
 function makeIssueNode(overrides: Record<string, unknown> = {}) {

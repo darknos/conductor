@@ -1,4 +1,4 @@
-import type { Issue, BlockerRef, TrackerConfig } from './types.js';
+import type { Issue, BlockerRef, TrackerConfig, ITrackerClient } from './types.js';
 import * as logger from './logger.js';
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -76,7 +76,7 @@ const ISSUE_FIELDS = `
   updatedAt
 `;
 
-export class TrackerClient {
+export class TrackerClient implements ITrackerClient {
   private endpoint: string;
   private apiKey: string;
   private projectSlug: string;

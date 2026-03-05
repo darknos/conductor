@@ -57,6 +57,18 @@ export interface TrackerConfig {
   projectSlug: string;
   activeStates: string[];
   terminalStates: string[];
+  /** Directory containing issue files (for kind: "local") */
+  issuesDir: string | null;
+}
+
+// --- Tracker Interface ---
+
+export interface ITrackerClient {
+  updateConfig(config: TrackerConfig): void;
+  fetchCandidateIssues(activeStates: string[]): Promise<Issue[]>;
+  fetchIssueStatesByIds(ids: string[]): Promise<Issue[]>;
+  fetchAllProjectIssues(): Promise<Issue[]>;
+  fetchIssuesByStates(stateNames: string[]): Promise<Issue[]>;
 }
 
 export interface AgentConfig {
