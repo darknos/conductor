@@ -1,0 +1,32 @@
+{
+  "name": "conductor",
+  "version": "0.1.0",
+  "description": "Orchestrates coding agents to get project work done",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "tsx src/main.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "liquidjs": "^10.24.0",
+    "yaml": "^2.8.2"
+  },
+  "optionalDependencies": {
+    "@herbcaudill/beads-sdk": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
