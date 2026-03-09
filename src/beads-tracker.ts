@@ -4,59 +4,49 @@ import * as logger from './logger.js';
 /**
  * Beads issue tracker adapter.
  *
- * Uses @herbcaudill/beads-sdk to communicate with a local beads daemon
- * via Unix socket. Requires `beads_repo_path` in tracker config.
+ * Uses @herbcaudill/beads-sdk (which spawns `bd` CLI subprocess) to read
+ * issues from a local beads repository.
  *
  * Beads statuses map to Conductor states:
  *   open        → Todo
  *   in_progress → In Progress
  *   blocked     → In Progress (with blockers)
  *   closed      → Done
- *   resolved    → Done
  *   deferred    → Backlog
- *
- * Custom status strings are passed through as-is.
  */
 
-// Beads SDK types (minimal surface we use)
-interface BeadsIssue {
+// Beads SDK types (imported dynamically)
+interface BdIssue {
   id: string;
   title: string;
-  description?: string | null;
+  description?: string;
   status: string;
-  priority?: number | null;
-  labels?: string[];
-  dependencies?: BeadsLinkedIssue[];
-  dependents?: BeadsLinkedIssue[];
-  created_at?: string | null;
-  updated_at?: string | null;
-  external_ref?: string | null;
+  priority: number;
+  issue_type: string;
+  created_at: string;
+  updated_at: string;
+  blocked_by?: string[];
+  dependencies?: Array<{ id: string; status?: string; dependency_type?: string }>;
 }
 
-interface BeadsLinkedIssue {
-  id: string;
-  title?: string;
+interface BdListOptions {
+  limit?: number;
   status?: string;
-  dependency_type?: string;
+  all?: boolean;
+  ready?: boolean;
 }
 
-interface BeadsClientInstance {
-  connect(repoPath: string): Promise<void>;
-  disconnect(): Promise<void>;
-  isConnected(): boolean;
-  list(filters?: Record<string, unknown>): Promise<BeadsIssue[]>;
-  show(id: string): Promise<BeadsIssue>;
-  showMany(ids: string[]): Promise<BeadsIssue[]>;
-  ready(filters?: Record<string, unknown>): Promise<BeadsIssue[]>;
+interface BeadsClientLike {
+  list(options?: BdListOptions): Promise<BdIssue[]>;
+  show(ids: string | string[]): Promise<BdIssue[]>;
+  getLabels(id: string): Promise<string[]>;
 }
 
-// Status mapping from beads → conductor state names
 const BEADS_STATUS_MAP: Record<string, string> = {
   open: 'Todo',
   in_progress: 'In Progress',
   blocked: 'In Progress',
   closed: 'Done',
-  resolved: 'Done',
   deferred: 'Backlog',
 };
 
@@ -64,17 +54,12 @@ function mapBeadsStatus(beadsStatus: string): string {
   return BEADS_STATUS_MAP[beadsStatus] ?? beadsStatus;
 }
 
-function normalizeBeadsIssue(bi: BeadsIssue): Issue {
-  const blockedBy: BlockerRef[] = [];
-  for (const dep of bi.dependencies ?? []) {
-    if (dep.dependency_type === 'blocks') {
-      blockedBy.push({
-        id: dep.id,
-        identifier: dep.id,
-        state: dep.status ? mapBeadsStatus(dep.status) : null,
-      });
-    }
-  }
+function normalizeBeadsIssue(bi: BdIssue): Issue {
+  const blockedBy: BlockerRef[] = (bi.blocked_by ?? []).map((blockerId) => ({
+    id: blockerId,
+    identifier: blockerId,
+    state: null,
+  }));
 
   return {
     id: bi.id,
@@ -84,8 +69,8 @@ function normalizeBeadsIssue(bi: BeadsIssue): Issue {
     priority: bi.priority ?? null,
     state: mapBeadsStatus(bi.status),
     branchName: null,
-    url: bi.external_ref ?? null,
-    labels: (bi.labels ?? []).map((l) => l.toLowerCase()),
+    url: null,
+    labels: [],
     blockedBy,
     createdAt: bi.created_at ? new Date(bi.created_at) : null,
     updatedAt: bi.updated_at ? new Date(bi.updated_at) : null,
@@ -94,8 +79,7 @@ function normalizeBeadsIssue(bi: BeadsIssue): Issue {
 
 export class BeadsTrackerClient implements ITrackerClient {
   private repoPath: string;
-  private client: BeadsClientInstance | null = null;
-  private connectPromise: Promise<void> | null = null;
+  private client: BeadsClientLike | null = null;
 
   constructor(config: TrackerConfig) {
     if (!config.beadsRepoPath) {
@@ -107,69 +91,24 @@ export class BeadsTrackerClient implements ITrackerClient {
   updateConfig(config: TrackerConfig): void {
     if (config.beadsRepoPath && config.beadsRepoPath !== this.repoPath) {
       this.repoPath = config.beadsRepoPath;
-      // Force reconnect on next operation
-      this.disconnect().catch(() => {});
-      this.client = null;
-      this.connectPromise = null;
+      this.client = null; // Force re-creation
     }
   }
 
-  private async ensureConnected(): Promise<BeadsClientInstance> {
-    if (this.client?.isConnected()) {
-      return this.client;
-    }
+  private async getClient(): Promise<BeadsClientLike> {
+    if (this.client) return this.client;
 
-    if (this.connectPromise) {
-      await this.connectPromise;
-      if (this.client?.isConnected()) return this.client;
-    }
-
-    this.connectPromise = this.doConnect();
-    await this.connectPromise;
-    return this.client!;
-  }
-
-  private async doConnect(): Promise<void> {
-    try {
-      // Dynamic import — beads-sdk is an optional dependency
-      // @ts-expect-error — optional dependency, may not be installed
-      const { BeadsClient } = await import('@herbcaudill/beads-sdk');
-      this.client = new BeadsClient({ actor: 'conductor' }) as unknown as BeadsClientInstance;
-      await this.client.connect(this.repoPath);
-      logger.info('Connected to beads daemon', { repoPath: this.repoPath });
-    } catch (err) {
-      this.client = null;
-      throw new Error(`Failed to connect to beads daemon at ${this.repoPath}: ${err}`);
-    }
-  }
-
-  async disconnect(): Promise<void> {
-    if (this.client?.isConnected()) {
-      await this.client.disconnect();
-    }
-    this.client = null;
-    this.connectPromise = null;
+    const { BeadsClient } = await import('@herbcaudill/beads-sdk');
+    this.client = new BeadsClient({ cwd: this.repoPath }) as BeadsClientLike;
+    logger.info('Created beads client', { repoPath: this.repoPath });
+    return this.client;
   }
 
   async fetchCandidateIssues(activeStates: string[]): Promise<Issue[]> {
-    const client = await this.ensureConnected();
-    // Fetch all open/in-progress issues, then filter by active states
-    const allIssues = await client.list({ status: 'open' });
-    const inProgress = await client.list({ status: 'in_progress' });
-    const blocked = await client.list({ status: 'blocked' });
-
-    const combined = [...allIssues, ...inProgress, ...blocked];
-    // Deduplicate by id
-    const seen = new Set<string>();
-    const unique: BeadsIssue[] = [];
-    for (const issue of combined) {
-      if (!seen.has(issue.id)) {
-        seen.add(issue.id);
-        unique.push(issue);
-      }
-    }
-
-    const normalized = unique.map(normalizeBeadsIssue);
+    const client = await this.getClient();
+    // Fetch non-closed issues
+    const issues = await client.list({ limit: 500 });
+    const normalized = issues.map(normalizeBeadsIssue);
     const candidates = normalized.filter((i) => activeStates.includes(i.state));
     logger.debug(`Fetched ${candidates.length} candidate issues from beads`);
     return candidates;
@@ -177,14 +116,14 @@ export class BeadsTrackerClient implements ITrackerClient {
 
   async fetchIssueStatesByIds(ids: string[]): Promise<Issue[]> {
     if (ids.length === 0) return [];
-    const client = await this.ensureConnected();
-    const beadsIssues = await client.showMany(ids);
-    return beadsIssues.map(normalizeBeadsIssue);
+    const client = await this.getClient();
+    const issues = await client.show(ids);
+    return issues.map(normalizeBeadsIssue);
   }
 
   async fetchAllProjectIssues(): Promise<Issue[]> {
-    const client = await this.ensureConnected();
-    const all = await client.list({});
+    const client = await this.getClient();
+    const all = await client.list({ all: true, limit: 1000 });
     logger.debug(`Fetched ${all.length} total issues from beads`);
     return all.map(normalizeBeadsIssue);
   }

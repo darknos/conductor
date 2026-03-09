@@ -48,13 +48,36 @@ async function cleanupOrphanedWorkspaces(
 }
 
 async function createSDK(): Promise<AgentSDK> {
-  // Dynamic import of Claude Agent SDK
+  // Remove CLAUDECODE env var to allow SDK to spawn nested Claude Code processes
+  delete process.env.CLAUDECODE;
+
   try {
-    // @ts-expect-error — SDK may not be installed at build time
     const mod = await import('@anthropic-ai/claude-agent-sdk');
-    return mod.default ?? mod;
-  } catch {
-    logger.warn('Claude Agent SDK not installed, using stub (development mode)');
+    const realQuery = mod.query;
+    // Wrap the SDK's standalone query() into our AgentSDK interface
+    return {
+      query(options) {
+        return realQuery({
+          prompt: options.prompt,
+          options: {
+            cwd: options.cwd,
+            maxTurns: options.maxTurns,
+            model: options.model,
+            permissionMode: options.permissionMode as any,
+            allowedTools: options.allowedTools,
+            disallowedTools: options.disallowedTools,
+            maxBudgetUsd: options.maxBudgetUsd,
+            env: options.env,
+            systemPrompt: options.systemPrompt,
+            stderr: (data: string) => {
+              logger.debug(`[claude-sdk-stderr] ${data.trimEnd()}`);
+            },
+          },
+        }) as any;
+      },
+    };
+  } catch (err) {
+    logger.warn(`Claude Agent SDK not available: ${err}. Using stub (development mode)`);
     return {
       async *query() {
         yield { type: 'result' as const, subtype: 'error' as const, error: 'SDK not installed' };
@@ -104,10 +127,9 @@ function launchBeadboard(dashboardConfig: DashboardConfig): ChildProcess | null 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  // Validate ANTHROPIC_API_KEY
+  // Warn if ANTHROPIC_API_KEY is not set (SDK may use Claude Code's own credentials)
   if (!process.env.ANTHROPIC_API_KEY) {
-    logger.error('ANTHROPIC_API_KEY environment variable is required');
-    process.exit(1);
+    logger.warn('ANTHROPIC_API_KEY not set — SDK will use Claude Code built-in credentials');
   }
 
   // Load workflow
@@ -146,12 +168,26 @@ async function main(): Promise<void> {
     logger.warn('Config reload failed, keeping previous config', { error: String(err) });
   });
 
-  // Startup workspace cleanup
-  // Fetch active issues to determine which workspaces are still needed
-  // (best-effort, don't block startup)
-  cleanupOrphanedWorkspaces(config.workspace.root, new Set()).catch((err) => {
+  // Startup terminal workspace cleanup per §8.6
+  // Only clean workspaces for issues that are in terminal states
+  try {
+    const terminalIssues = await orchestrator.getTracker().fetchIssuesByStates(config.tracker.terminalStates);
+    const terminalIdentifiers = new Set(terminalIssues.map((i) => i.identifier));
+    // Pass all NON-terminal as active so only terminal workspaces are cleaned
+    const allActive = new Set<string>();
+    try {
+      const { readdir } = await import('node:fs/promises');
+      const entries = await readdir(config.workspace.root);
+      for (const entry of entries) {
+        if (!terminalIdentifiers.has(entry)) {
+          allActive.add(entry);
+        }
+      }
+    } catch { /* root may not exist yet */ }
+    await cleanupOrphanedWorkspaces(config.workspace.root, allActive);
+  } catch (err) {
     logger.warn('Startup workspace cleanup failed', { error: String(err) });
-  });
+  }
 
   // Optional HTTP server
   const serverPort = args.port ?? config.server.port;

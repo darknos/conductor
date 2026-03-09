@@ -1,19 +1,10 @@
 ---
 id: local-2
 identifier: LOCAL-2
-title: Fix login error handling
-state: In Progress
+title: Create goodbye.txt
+state: Done
 priority: 2
-labels: [bug]
-blocked_by:
-  - identifier: LOCAL-1
-    state: Todo
+labels: [demo]
 ---
 
-Login form shows generic "Something went wrong" instead of specific error messages.
-
-## Steps to Reproduce
-
-1. Enter invalid credentials
-2. Submit form
-3. See generic error instead of "Invalid email or password"
+Create a file called `goodbye.txt` with the text "Goodbye!" in the workspace root.

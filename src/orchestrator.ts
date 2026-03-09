@@ -10,7 +10,7 @@ import type {
   AgentEvent,
   ITrackerClient,
 } from './types.js';
-import { ExitReason } from './types.js';
+import { ExitReason, RunAttemptPhase } from './types.js';
 import { createTracker } from './tracker-factory.js';
 import { WorkspaceManager } from './workspace.js';
 import { AgentRunner } from './agent-runner.js';
@@ -19,6 +19,16 @@ import * as logger from './logger.js';
 
 const CONTINUATION_RETRY_DELAY_MS = 1_000;
 const FAILURE_BASE_DELAY_MS = 10_000;
+
+/** Normalize state for comparison per §4.2: trim + lowercase */
+function normalizeState(state: string): string {
+  return state.trim().toLowerCase();
+}
+
+function stateMatches(state: string, stateList: string[]): boolean {
+  const norm = normalizeState(state);
+  return stateList.some((s) => normalizeState(s) === norm);
+}
 
 export class Orchestrator extends EventEmitter {
   private config: ConductorConfig;
@@ -133,18 +143,23 @@ export class Orchestrator extends EventEmitter {
     this.isPolling = true;
 
     try {
-      // 1. Fetch candidates
+      // 1. Reconcile running issues
+      await this.reconcile();
+
+      // 2. Dispatch preflight validation (§6.3)
+      if (!this.validateDispatchConfig()) {
+        return; // Skip dispatch, keep reconciliation active
+      }
+
+      // 3. Fetch candidates
       const candidates = await this.tracker.fetchCandidateIssues(
         this.config.tracker.activeStates,
       );
 
-      // 2. Reconcile running issues
-      await this.reconcile();
-
-      // 3. Sort candidates
+      // 4. Sort candidates
       const sorted = this.sortCandidates(candidates);
 
-      // 4. Dispatch eligible
+      // 5. Dispatch eligible
       for (const issue of sorted) {
         if (!this.canDispatch(issue)) continue;
         this.dispatch(issue, null);
@@ -154,6 +169,28 @@ export class Orchestrator extends EventEmitter {
     } finally {
       this.isPolling = false;
     }
+  }
+
+  /** Dispatch preflight validation per §6.3 */
+  private validateDispatchConfig(): boolean {
+    const { tracker, agent } = this.config;
+    if (!tracker.kind) {
+      logger.error('Dispatch validation: tracker.kind is not set');
+      return false;
+    }
+    if (tracker.kind === 'linear' && !tracker.apiKey) {
+      logger.error('Dispatch validation: tracker.api_key missing for Linear');
+      return false;
+    }
+    if (tracker.kind === 'linear' && !tracker.projectSlug) {
+      logger.error('Dispatch validation: tracker.project_slug missing for Linear');
+      return false;
+    }
+    if (agent.maxConcurrentAgents < 1) {
+      logger.error('Dispatch validation: max_concurrent_agents must be >= 1');
+      return false;
+    }
+    return true;
   }
 
   private sortCandidates(issues: Issue[]): Issue[] {
@@ -183,10 +220,10 @@ export class Orchestrator extends EventEmitter {
     if (this.state.retryQueue.has(id)) return false;
 
     // Must be in active state
-    if (!this.config.tracker.activeStates.includes(state)) return false;
+    if (!stateMatches(state, this.config.tracker.activeStates)) return false;
 
     // Must not be terminal
-    if (this.config.tracker.terminalStates.includes(state)) return false;
+    if (stateMatches(state, this.config.tracker.terminalStates)) return false;
 
     // Global slot check
     if (this.state.running.size >= this.config.agent.maxConcurrentAgents) return false;
@@ -200,10 +237,10 @@ export class Orchestrator extends EventEmitter {
       if (runningInState >= byState[state]) return false;
     }
 
-    // Todo + non-terminal blockers → ineligible
-    if (state === 'Todo' && issue.blockedBy.length > 0) {
+    // Todo + non-terminal blockers → ineligible (§8.2)
+    if (normalizeState(state) === 'todo' && issue.blockedBy.length > 0) {
       const hasNonTerminalBlocker = issue.blockedBy.some(
-        (b) => b.state !== null && !this.config.tracker.terminalStates.includes(b.state),
+        (b) => b.state !== null && !stateMatches(b.state, this.config.tracker.terminalStates),
       );
       if (hasNonTerminalBlocker) {
         logger.debug(`Skipping ${identifier}: blocked by non-terminal issue`, {
@@ -231,12 +268,14 @@ export class Orchestrator extends EventEmitter {
       identifier,
       issue,
       sessionId: null,
+      phase: RunAttemptPhase.PreparingWorkspace,
       lastAgentMessage: null,
       lastAgentEvent: null,
       lastAgentTimestamp: null,
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
+      turnCount: 0,
       retryAttempt: attempt,
       startedAt: new Date(),
     };
@@ -279,8 +318,22 @@ export class Orchestrator extends EventEmitter {
 
     switch (exit.reason) {
       case ExitReason.Normal:
-        // Continuation retry at 1s
+        // Continuation retry per §16.6 — agent may need another session
         this.scheduleRetry(issue, (entry?.retryAttempt ?? 0) + 1, CONTINUATION_RETRY_DELAY_MS, null);
+        break;
+
+      case ExitReason.MaxTurns:
+        // Agent exhausted max turns — mark completed, no more retries
+        logger.info(`Agent finished ${identifier} (max_turns), marking completed`, {
+          issueId: id,
+          issueIdentifier: identifier,
+        });
+        this.state.completed.add(id);
+        if (this.tracker.updateIssueState) {
+          this.tracker.updateIssueState(id, 'Done').catch((err) => {
+            logger.warn(`Failed to update issue state for ${identifier}`, { error: String(err) });
+          });
+        }
         break;
 
       case ExitReason.Failure:
@@ -309,6 +362,11 @@ export class Orchestrator extends EventEmitter {
 
   private scheduleRetry(issue: Issue, attempt: number, delayMs: number, error: string | null): void {
     const { id, identifier } = issue;
+
+    // Cancel existing retry timer for same issue
+    const existing = this.state.retryQueue.get(id);
+    if (existing) clearTimeout(existing.timerHandle);
+
     logger.info(`Scheduling retry for ${identifier} in ${delayMs}ms (attempt ${attempt})`, {
       issueId: id,
       issueIdentifier: identifier,
@@ -316,7 +374,7 @@ export class Orchestrator extends EventEmitter {
 
     const timerHandle = setTimeout(() => {
       this.state.retryQueue.delete(id);
-      this.dispatch(issue, attempt);
+      this.handleRetryFired(issue, attempt);
     }, delayMs);
 
     this.state.retryQueue.set(id, {
@@ -327,6 +385,37 @@ export class Orchestrator extends EventEmitter {
       timerHandle,
       error,
     });
+  }
+
+  /** Re-validate issue eligibility on retry fire per §16.6 */
+  private async handleRetryFired(issue: Issue, attempt: number): Promise<void> {
+    const { id, identifier } = issue;
+    try {
+      const candidates = await this.tracker.fetchCandidateIssues(this.config.tracker.activeStates);
+      const found = candidates.find((c) => c.id === id);
+      if (!found) {
+        // Issue no longer active — release claim
+        logger.info(`Retry fired for ${identifier} but issue no longer active, releasing`, {
+          issueId: id, issueIdentifier: identifier,
+        });
+        this.state.claimed.delete(id);
+        return;
+      }
+      // Check concurrency slots
+      if (this.state.running.size >= this.config.agent.maxConcurrentAgents) {
+        logger.info(`Retry fired for ${identifier} but no slots, requeuing`, {
+          issueId: id, issueIdentifier: identifier,
+        });
+        this.scheduleRetry(found, attempt, CONTINUATION_RETRY_DELAY_MS, 'No concurrency slots available');
+        return;
+      }
+      this.dispatch(found, attempt);
+    } catch (err) {
+      logger.warn(`Retry re-validation failed for ${identifier}, rescheduling`, {
+        issueId: id, error: String(err),
+      });
+      this.scheduleRetry(issue, attempt + 1, FAILURE_BASE_DELAY_MS, `Retry re-validation failed: ${err}`);
+    }
   }
 
   private async reconcile(): Promise<void> {
@@ -348,8 +437,8 @@ export class Orchestrator extends EventEmitter {
       if (!refreshed) continue;
 
       const { state } = refreshed;
-      const isTerminal = this.config.tracker.terminalStates.includes(state);
-      const isActive = this.config.tracker.activeStates.includes(state);
+      const isTerminal = stateMatches(state, this.config.tracker.terminalStates);
+      const isActive = stateMatches(state, this.config.tracker.activeStates);
 
       if (isTerminal) {
         // Terminal → cancel agent + cleanup workspace
@@ -426,8 +515,10 @@ export class Orchestrator extends EventEmitter {
           entry.inputTokens = event.metrics.inputTokens;
           entry.outputTokens = event.metrics.outputTokens;
           entry.totalTokens = event.metrics.totalTokens;
+          entry.turnCount = event.metrics.turnsCompleted;
           entry.lastAgentTimestamp = new Date();
           entry.lastAgentEvent = 'turn_completed';
+          entry.phase = RunAttemptPhase.StreamingTurns;
         }
         break;
       }
@@ -437,6 +528,7 @@ export class Orchestrator extends EventEmitter {
           entry.lastAgentTimestamp = new Date();
           entry.lastAgentEvent = 'turn_failed';
           entry.lastAgentMessage = event.error;
+          entry.phase = RunAttemptPhase.Failed;
         }
         break;
       }
@@ -445,6 +537,17 @@ export class Orchestrator extends EventEmitter {
         if (entry) {
           entry.lastAgentTimestamp = new Date();
           entry.lastAgentMessage = event.message;
+        }
+        break;
+      }
+      case 'rate_limit': {
+        this.state.rateLimits = {
+          retryAfterMs: event.retryAfterMs,
+          lastSeenAt: new Date(),
+        };
+        const entry = this.state.running.get(event.issueId);
+        if (entry) {
+          entry.lastAgentTimestamp = new Date();
         }
         break;
       }

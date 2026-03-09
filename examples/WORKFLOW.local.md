@@ -5,29 +5,29 @@ tracker:
   active_states:
     - Todo
     - In Progress
-    - Rework
   terminal_states:
     - Done
     - Cancelled
 polling:
   interval_ms: 5000
+dashboard:
+  auto_launch: false
 workspace:
   root: ~/conductor-workspaces
-hooks:
-  after_create: |
-    echo "Workspace created for {{ issue.identifier }}"
 agent:
-  max_concurrent_agents: 3
-  max_turns: 20
-  permission_mode: "acceptEdits"
+  max_concurrent_agents: 2
+  max_turns: 10
+  model: claude-haiku-4-5-20251001
+  permission_mode: acceptEdits
+server:
+  port: 8080
 ---
 
-You are working on a local issue `{{ issue.identifier }}`.
+You are working on issue `{{ issue.identifier }}`.
 
 Title: {{ issue.title }}
-Current status: {{ issue.state }}
+State: {{ issue.state }}
 
-Description:
 {% if issue.description %}
 {{ issue.description }}
 {% else %}

@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { Issue, TrackerConfig, ITrackerClient } from './types.js';
@@ -164,5 +164,27 @@ export class LocalTrackerClient implements ITrackerClient {
   async fetchIssuesByStates(stateNames: string[]): Promise<Issue[]> {
     const all = await this.loadAllIssues();
     return all.filter((i) => stateNames.includes(i.state));
+  }
+
+  async updateIssueState(issueId: string, newState: string): Promise<void> {
+    const entries = await readdir(this.issuesDir);
+    const mdFiles = entries.filter(
+      (f) => extname(f).toLowerCase() === '.md' || extname(f).toLowerCase() === '.markdown',
+    );
+
+    for (const filename of mdFiles) {
+      const filePath = join(this.issuesDir, filename);
+      const content = await readFile(filePath, 'utf-8');
+      const issue = parseIssueFile(filename, content);
+      if (issue && issue.id === issueId) {
+        const updated = content.replace(
+          /^(state:\s*).+$/m,
+          `$1${newState}`,
+        );
+        await writeFile(filePath, updated, 'utf-8');
+        logger.info(`Updated ${issue.identifier} state to "${newState}"`);
+        return;
+      }
+    }
   }
 }
